@@ -2,1377 +2,1660 @@ class DynamicEnergyPanel extends HTMLElement {
   constructor() {
     super();
 
-    this._hass = null;
-    this._config = null;
-    this._sources = [];
-    this._interval = 10;
-    this._loading = true;
-    this._saving = false;
-    this._error = null;
-    this._expanded = new Set();
-    this._adding = false;
-
     this.attachShadow({ mode: "open" });
+
+    this.hass = null;
+    this.config = null;
+    this.sources = [];
+    this.editingId = null;
+    this.modalOpen = false;
+    this.loading = true;
+    this.saving = false;
+    this.error = null;
+    this.brandToken = null;
   }
 
   set hass(value) {
     this._hass = value;
 
-    if (this._loading && value) {
-      this._loadConfig();
+    if (value && !this._initialized) {
+      this._initialized = true;
+      this.initialize();
     }
-
-    this._render();
   }
 
-  set panel(value) {
-    this._panel = value;
-  }
-
-  set narrow(value) {
-    this._narrow = value;
-    this._render();
+  get hass() {
+    return this._hass;
   }
 
   connectedCallback() {
-    this._render();
+    this.render();
   }
 
-  async _loadConfig() {
-    if (!this._hass || !this._loading) {
+  async initialize() {
+    await this.loadBrandToken();
+    await this.loadConfig();
+  }
+
+  async loadBrandToken() {
+    if (!this.hass?.connection) {
       return;
     }
 
     try {
-      const result = await this._hass.connection.sendMessagePromise({
+      const result = await this.hass.connection.sendMessagePromise({
+        type: "brands/access_token",
+      });
+
+      this.brandToken = result?.token || null;
+    } catch (error) {
+      console.warn("Dynamic Energy: unable to obtain brand image token", error);
+    }
+  }
+
+  getLogoUrl() {
+    const base = "/api/brands/integration/dynamic_energy";
+
+    if (!this.brandToken) {
+      return `${base}/icon.png`;
+    }
+
+    return `${base}/icon@2x.png?token=${encodeURIComponent(this.brandToken)}`;
+  }
+
+  async loadConfig() {
+    if (!this.hass?.connection) {
+      return;
+    }
+
+    this.loading = true;
+    this.render();
+
+    try {
+      const result = await this.hass.connection.sendMessagePromise({
         type: "dynamic_energy/get_config",
       });
 
-      this._config = result;
-      this._sources = (result.sources || []).map((source) => ({ ...source }));
-      this._interval = Number(result.observation_interval) || 10;
-      this._loading = false;
+      this.config = result;
 
-      this._render();
+      this.sources = Array.isArray(result.sources)
+        ? structuredClone(result.sources)
+        : [];
+
+      this.error = null;
     } catch (error) {
-      this._error =
-        error?.message || "Unable to load Dynamic Energy configuration.";
-      this._loading = false;
-      this._render();
+      console.error("Dynamic Energy: failed to load configuration", error);
+
+      this.error = "Unable to load Dynamic Energy configuration.";
+    } finally {
+      this.loading = false;
+      this.render();
     }
   }
 
-  _entityList(deviceClass) {
-    if (!this._hass?.states) {
+  goBack() {
+    if (this.modalOpen) {
+      this.closeModal();
+      return;
+    }
+
+    window.history.back();
+  }
+
+  get powerEntities() {
+    if (!this.hass?.states) {
       return [];
     }
 
-    return Object.entries(this._hass.states)
-      .filter(([entityId, state]) => {
-        if (!entityId.startsWith("sensor.")) {
+    return Object.values(this.hass.states)
+      .filter((state) => {
+        if (!state.entity_id.startsWith("sensor.")) {
           return false;
         }
 
-        if (state.state === "unavailable" || state.state === "unknown") {
-          return false;
-        }
+        const deviceClass = state.attributes?.device_class;
 
-        return state.attributes?.device_class === deviceClass;
+        const unit = String(
+          state.attributes?.unit_of_measurement || "",
+        ).toLowerCase();
+
+        return deviceClass === "power" || unit === "w" || unit === "kw";
       })
-      .map(([entityId, state]) => ({
-        entityId,
-        name: state.attributes?.friendly_name || entityId,
-      }))
-      .sort((a, b) =>
-        a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
-      );
+      .sort((a, b) => this.entityLabel(a).localeCompare(this.entityLabel(b)));
   }
 
-  _powerEntities() {
-    return this._entityList("power");
-  }
-
-  _energyEntities() {
-    return this._entityList("energy");
-  }
-
-  _entityName(entityId) {
-    if (!entityId) {
-      return "Not selected";
+  get energyEntities() {
+    if (!this.hass?.states) {
+      return [];
     }
 
-    const state = this._hass?.states?.[entityId];
+    return Object.values(this.hass.states)
+      .filter((state) => {
+        if (!state.entity_id.startsWith("sensor.")) {
+          return false;
+        }
 
-    return state?.attributes?.friendly_name || entityId;
+        const deviceClass = state.attributes?.device_class;
+
+        const unit = String(
+          state.attributes?.unit_of_measurement || "",
+        ).toLowerCase();
+
+        return deviceClass === "energy" || unit === "kwh" || unit === "wh";
+      })
+      .sort((a, b) => this.entityLabel(a).localeCompare(this.entityLabel(b)));
   }
 
-  _render() {
-    if (!this.shadowRoot) {
-      return;
+  entityLabel(state) {
+    return state.attributes?.friendly_name || state.entity_id;
+  }
+
+  formatEntityOption(state) {
+    const friendly = this.entityLabel(state);
+
+    if (friendly === state.entity_id) {
+      return friendly;
     }
 
-    if (this._loading) {
-      this.shadowRoot.innerHTML = `
-        <style>${this._styles()}</style>
-        <main class="page">
-          <div class="loading">
-            <div class="spinner"></div>
-            <span>Loading Dynamic Energy...</span>
-          </div>
-        </main>
-      `;
-      return;
-    }
-
-    if (this._error) {
-      this.shadowRoot.innerHTML = `
-        <style>${this._styles()}</style>
-        <main class="page">
-          <div class="error-card">
-            <div class="error-icon">!</div>
-            <div>
-              <h2>Unable to load configuration</h2>
-              <p>${this._escape(this._error)}</p>
-              <button class="primary" id="retry">
-                Try again
-              </button>
-            </div>
-          </div>
-        </main>
-      `;
-
-      this.shadowRoot.querySelector("#retry")?.addEventListener("click", () => {
-        this._loading = true;
-        this._error = null;
-        this._render();
-        this._loadConfig();
-      });
-
-      return;
-    }
-
-    this.shadowRoot.innerHTML = `
-      <style>${this._styles()}</style>
-
-      <main class="page">
-
-        <header class="header">
-          <div>
-            <div class="eyebrow">CONFIGURATION</div>
-            <h1>Dynamic Energy</h1>
-            <p>
-              Manage monitoring and smart plugs.
-            </p>
-          </div>
-
-          <button
-            class="save-button"
-            id="save"
-            ${this._saving ? "disabled" : ""}
-          >
-            ${
-              this._saving
-                ? '<span class="button-spinner"></span> Saving...'
-                : "Save changes"
-            }
-          </button>
-        </header>
-
-        ${this._renderMonitoring()}
-
-        <section class="section">
-          <div class="section-heading">
-            <div>
-              <h2>Smart plugs</h2>
-              <p>
-                Configure the devices included in
-                apartment energy monitoring.
-              </p>
-            </div>
-
-            <button
-              class="secondary"
-              id="add"
-            >
-              <span class="plus">+</span>
-              Add smart plug
-            </button>
-          </div>
-
-          <div class="plug-list">
-            ${
-              this._sources.length
-                ? this._sources
-                    .map((source, index) => this._renderSource(source, index))
-                    .join("")
-                : `
-                  <div class="empty-card">
-                    <div class="empty-icon">⚡</div>
-                    <h3>No smart plugs configured</h3>
-                    <p>
-                      Add your first smart plug
-                      to start energy monitoring.
-                    </p>
-                    <button
-                      class="primary"
-                      id="empty-add"
-                    >
-                      Add smart plug
-                    </button>
-                  </div>
-                `
-            }
-          </div>
-
-          ${this._adding ? this._renderAddForm() : ""}
-        </section>
-
-        <footer class="footer">
-          <span>
-            ${this._sources.length} smart plug${
-              this._sources.length === 1 ? "" : "s"
-            }
-          </span>
-
-          <button
-            class="save-button"
-            id="save-bottom"
-            ${this._saving ? "disabled" : ""}
-          >
-            ${
-              this._saving
-                ? '<span class="button-spinner"></span> Saving...'
-                : "Save changes"
-            }
-          </button>
-        </footer>
-
-      </main>
-    `;
-
-    this._bindEvents();
+    return `${friendly} — ${state.entity_id}`;
   }
 
-  _renderMonitoring() {
-    return `
-      <section class="section monitoring">
-        <div class="section-heading">
-          <div>
-            <h2>Monitoring</h2>
-            <p>
-              How often Dynamic Energy updates
-              its measurements.
-            </p>
-          </div>
-        </div>
-
-        <div class="monitoring-card">
-          <div class="setting-info">
-            <div class="setting-icon">↻</div>
-            <div>
-              <strong>Update interval</strong>
-              <span>
-                Faster updates use slightly more
-                processing.
-              </span>
-            </div>
-          </div>
-
-          <select id="interval">
-            ${[5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60]
-              .map(
-                (value) => `
-                  <option
-                    value="${value}"
-                    ${value === this._interval ? "selected" : ""}
-                  >
-                    ${value} seconds
-                  </option>
-                `,
-              )
-              .join("")}
-          </select>
-        </div>
-      </section>
-    `;
+  get currentForm() {
+    return (
+      this._form || {
+        name: "",
+        power_entity: "",
+        energy_entity: "",
+        energy_type: "monthly",
+        icon: "mdi:flash",
+      }
+    );
   }
 
-  _renderSource(source, index) {
-    const expanded = this._expanded.has(source.source_id);
+  openAdd() {
+    this.editingId = null;
 
-    const powerName = this._entityName(source.power_entity);
-
-    const energyName = this._entityName(source.energy_entity);
-
-    return `
-      <article
-        class="plug-card ${expanded ? "expanded" : ""}"
-        data-index="${index}"
-      >
-
-        <button
-          class="plug-header"
-          data-action="toggle"
-          data-id="${this._escapeAttr(source.source_id)}"
-        >
-          <div class="plug-identity">
-            <div class="plug-icon">
-              ${source.icon ? this._icon(source.icon) : "⚡"}
-            </div>
-
-            <div>
-              <h3>
-                ${this._escape(source.name || "Unnamed smart plug")}
-              </h3>
-
-              <p>
-                ${this._escape(powerName)}
-                ·
-                ${this._escape(energyName)}
-              </p>
-            </div>
-          </div>
-
-          <div class="header-actions">
-            <span
-              class="energy-badge ${source.energy_type}"
-            >
-              ${source.energy_type === "cumulative" ? "Cumulative" : "Monthly"}
-            </span>
-
-            <span class="chevron">
-              ${expanded ? "⌃" : "⌄"}
-            </span>
-          </div>
-        </button>
-
-        ${expanded ? this._renderSourceEditor(source, index) : ""}
-
-      </article>
-    `;
-  }
-
-  _renderSourceEditor(source, index) {
-    return `
-      <div class="editor">
-
-        <div class="form-grid">
-
-          <label class="field full">
-            <span>Name</span>
-            <input
-              data-field="name"
-              data-index="${index}"
-              value="${this._escapeAttr(source.name || "")}"
-              placeholder="e.g. Bedroom Matter Plug"
-            />
-          </label>
-
-          <label class="field">
-            <span>Power sensor</span>
-            <select
-              data-field="power_entity"
-              data-index="${index}"
-            >
-              <option value="">
-                Select power sensor
-              </option>
-              ${this._entityOptions(this._powerEntities(), source.power_entity)}
-            </select>
-          </label>
-
-          <label class="field">
-            <span>Energy sensor</span>
-            <select
-              data-field="energy_entity"
-              data-index="${index}"
-            >
-              <option value="">
-                Select energy sensor
-              </option>
-              ${this._entityOptions(
-                this._energyEntities(),
-                source.energy_entity,
-              )}
-            </select>
-          </label>
-
-          <label class="field">
-            <span>Energy type</span>
-            <select
-              data-field="energy_type"
-              data-index="${index}"
-            >
-              <option
-                value="monthly"
-                ${source.energy_type === "monthly" ? "selected" : ""}
-              >
-                Monthly reset
-              </option>
-              <option
-                value="cumulative"
-                ${source.energy_type === "cumulative" ? "selected" : ""}
-              >
-                Cumulative
-              </option>
-            </select>
-          </label>
-
-          <label class="field">
-            <span>Icon</span>
-            <input
-              data-field="icon"
-              data-index="${index}"
-              value="${this._escapeAttr(source.icon || "")}"
-              placeholder="mdi:flash"
-            />
-          </label>
-
-        </div>
-
-        <div class="editor-footer">
-
-          <button
-            class="danger"
-            data-action="remove"
-            data-index="${index}"
-          >
-            Remove smart plug
-          </button>
-
-          <button
-            class="secondary"
-            data-action="collapse"
-            data-id="${this._escapeAttr(source.source_id)}"
-          >
-            Done
-          </button>
-
-        </div>
-
-      </div>
-    `;
-  }
-
-  _renderAddForm() {
-    return `
-      <div class="add-card">
-
-        <div class="add-header">
-          <div>
-            <h3>Add smart plug</h3>
-            <p>
-              Add a new device to energy monitoring.
-            </p>
-          </div>
-
-          <button
-            class="icon-button"
-            id="cancel-add"
-            aria-label="Cancel"
-          >
-            ×
-          </button>
-        </div>
-
-        <div class="form-grid">
-
-          <label class="field full">
-            <span>Name</span>
-            <input
-              id="new-name"
-              placeholder="e.g. Bedroom Matter Plug"
-            />
-          </label>
-
-          <label class="field">
-            <span>Power sensor</span>
-            <select id="new-power">
-              <option value="">
-                Select power sensor
-              </option>
-              ${this._entityOptions(this._powerEntities())}
-            </select>
-          </label>
-
-          <label class="field">
-            <span>Energy sensor</span>
-            <select id="new-energy">
-              <option value="">
-                Select energy sensor
-              </option>
-              ${this._entityOptions(this._energyEntities())}
-            </select>
-          </label>
-
-          <label class="field">
-            <span>Energy type</span>
-            <select id="new-type">
-              <option value="monthly">
-                Monthly reset
-              </option>
-              <option value="cumulative">
-                Cumulative
-              </option>
-            </select>
-          </label>
-
-          <label class="field">
-            <span>Icon</span>
-            <input
-              id="new-icon"
-              placeholder="mdi:flash"
-            />
-          </label>
-
-        </div>
-
-        <div class="editor-footer">
-          <button
-            class="secondary"
-            id="cancel-add-bottom"
-          >
-            Cancel
-          </button>
-
-          <button
-            class="primary"
-            id="confirm-add"
-          >
-            Add smart plug
-          </button>
-        </div>
-
-      </div>
-    `;
-  }
-
-  _entityOptions(entities, selected = "") {
-    return entities
-      .map(
-        (entity) => `
-          <option
-            value="${this._escapeAttr(entity.entityId)}"
-            ${entity.entityId === selected ? "selected" : ""}
-          >
-            ${this._escape(entity.name)}
-          </option>
-        `,
-      )
-      .join("");
-  }
-
-  _icon(icon) {
-    if (!icon.startsWith("mdi:")) {
-      return "⚡";
-    }
-
-    return "⚡";
-  }
-
-  _bindEvents() {
-    this.shadowRoot
-      .querySelector("#interval")
-      ?.addEventListener("change", (event) => {
-        this._interval = Number(event.target.value);
-      });
-
-    this.shadowRoot.querySelectorAll("[data-field]").forEach((element) => {
-      element.addEventListener("input", (event) =>
-        this._updateField(event.target),
-      );
-
-      element.addEventListener("change", (event) =>
-        this._updateField(event.target),
-      );
-    });
-
-    this.shadowRoot
-      .querySelectorAll('[data-action="toggle"]')
-      .forEach((button) => {
-        button.addEventListener("click", () => {
-          const id = button.dataset.id;
-
-          if (this._expanded.has(id)) {
-            this._expanded.delete(id);
-          } else {
-            this._expanded.add(id);
-          }
-
-          this._render();
-        });
-      });
-
-    this.shadowRoot
-      .querySelectorAll('[data-action="collapse"]')
-      .forEach((button) => {
-        button.addEventListener("click", () => {
-          this._expanded.delete(button.dataset.id);
-          this._render();
-        });
-      });
-
-    this.shadowRoot
-      .querySelectorAll('[data-action="remove"]')
-      .forEach((button) => {
-        button.addEventListener("click", () => {
-          const index = Number(button.dataset.index);
-
-          this._removeSource(index);
-        });
-      });
-
-    this.shadowRoot.querySelector("#add")?.addEventListener("click", () => {
-      this._adding = true;
-      this._render();
-    });
-
-    this.shadowRoot
-      .querySelector("#empty-add")
-      ?.addEventListener("click", () => {
-        this._adding = true;
-        this._render();
-      });
-
-    this.shadowRoot
-      .querySelector("#cancel-add")
-      ?.addEventListener("click", () => {
-        this._adding = false;
-        this._render();
-      });
-
-    this.shadowRoot
-      .querySelector("#cancel-add-bottom")
-      ?.addEventListener("click", () => {
-        this._adding = false;
-        this._render();
-      });
-
-    this.shadowRoot
-      .querySelector("#confirm-add")
-      ?.addEventListener("click", () => {
-        this._addSource();
-      });
-
-    this.shadowRoot
-      .querySelector("#save")
-      ?.addEventListener("click", () => this._save());
-
-    this.shadowRoot
-      .querySelector("#save-bottom")
-      ?.addEventListener("click", () => this._save());
-  }
-
-  _updateField(element) {
-    const index = Number(element.dataset.index);
-
-    const field = element.dataset.field;
-
-    if (!this._sources[index] || !field) {
-      return;
-    }
-
-    this._sources[index] = {
-      ...this._sources[index],
-      [field]: element.value,
+    this._form = {
+      name: "",
+      power_entity: "",
+      energy_entity: "",
+      energy_type: "monthly",
+      icon: "mdi:flash",
     };
+
+    this.modalOpen = true;
+    this.error = null;
+
+    this.render();
+
+    requestAnimationFrame(() => {
+      this.shadowRoot?.querySelector("#source-name")?.focus();
+    });
   }
 
-  _removeSource(index) {
-    const source = this._sources[index];
+  openEdit(source) {
+    this.editingId = source.source_id;
 
-    if (!source) {
+    this._form = {
+      name: source.name || "",
+      power_entity: source.power_entity || "",
+      energy_entity: source.energy_entity || "",
+      energy_type: source.energy_type || "monthly",
+      icon: source.icon || "mdi:flash",
+    };
+
+    this.modalOpen = true;
+    this.error = null;
+
+    this.render();
+  }
+
+  closeModal() {
+    if (this.saving) {
       return;
     }
 
+    this.modalOpen = false;
+    this.editingId = null;
+    this._form = null;
+    this.error = null;
+
+    this.render();
+  }
+
+  updateForm(field, value) {
+    if (!this._form) {
+      return;
+    }
+
+    this._form[field] = value;
+  }
+
+  async submitSource() {
+    if (!this._form) {
+      return;
+    }
+
+    const name = this._form.name.trim();
+    const powerEntity = this._form.power_entity;
+    const energyEntity = this._form.energy_entity;
+
+    if (!name) {
+      this.error = "Please enter a name for the smart plug.";
+
+      this.render();
+      return;
+    }
+
+    if (!powerEntity) {
+      this.error = "Please select a power sensor.";
+
+      this.render();
+      return;
+    }
+
+    if (!energyEntity) {
+      this.error = "Please select an energy sensor.";
+
+      this.render();
+      return;
+    }
+
+    const duplicateName = this.sources.some(
+      (source) =>
+        source.name.toLowerCase() === name.toLowerCase() &&
+        source.source_id !== this.editingId,
+    );
+
+    if (duplicateName) {
+      this.error = "A smart plug with this name already exists.";
+
+      this.render();
+      return;
+    }
+
+    const duplicateSensors = this.sources.some(
+      (source) =>
+        source.power_entity === powerEntity &&
+        source.energy_entity === energyEntity &&
+        source.source_id !== this.editingId,
+    );
+
+    if (duplicateSensors) {
+      this.error = "These power and energy sensors are already configured.";
+
+      this.render();
+      return;
+    }
+
+    if (this.editingId) {
+      const index = this.sources.findIndex(
+        (source) => source.source_id === this.editingId,
+      );
+
+      if (index !== -1) {
+        this.sources[index] = {
+          ...this.sources[index],
+          name,
+          power_entity: powerEntity,
+          energy_entity: energyEntity,
+          energy_type: this._form.energy_type,
+          icon: this._form.icon.trim() || "mdi:flash",
+        };
+      }
+    } else {
+      this.sources.push({
+        source_id: crypto.randomUUID(),
+        name,
+        power_entity: powerEntity,
+        energy_entity: energyEntity,
+        energy_type: this._form.energy_type,
+        icon: this._form.icon.trim() || "mdi:flash",
+      });
+    }
+
+    this.modalOpen = false;
+    this.editingId = null;
+    this._form = null;
+    this.error = null;
+
+    this.render();
+  }
+
+  removeSource(source) {
     const confirmed = window.confirm(
-      `Remove "${source.name}" from Dynamic Energy monitoring?`,
+      `Remove "${source.name}" from energy monitoring?\n\nHistorical energy data will be kept.`,
     );
 
     if (!confirmed) {
       return;
     }
 
-    this._sources.splice(index, 1);
-    this._render();
+    this.sources = this.sources.filter(
+      (item) => item.source_id !== source.source_id,
+    );
+
+    this.render();
   }
 
-  _addSource() {
-    const name = this.shadowRoot.querySelector("#new-name")?.value.trim();
-
-    const power = this.shadowRoot.querySelector("#new-power")?.value;
-
-    const energy = this.shadowRoot.querySelector("#new-energy")?.value;
-
-    const type = this.shadowRoot.querySelector("#new-type")?.value || "monthly";
-
-    const icon = this.shadowRoot.querySelector("#new-icon")?.value.trim() || "";
-
-    if (!name || !power || !energy) {
-      window.alert("Please provide a name, power sensor and energy sensor.");
+  async saveChanges() {
+    if (!this.hass?.connection || this.saving) {
       return;
     }
 
-    const source = {
-      source_id: globalThis.crypto?.randomUUID
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random()}`,
-      name,
-      power_entity: power,
-      energy_entity: energy,
-      energy_type: type,
-      icon,
-    };
+    if (!this.config?.entry_id) {
+      this.error =
+        "Dynamic Energy config entry could not be identified. Please reload the page.";
 
-    this._sources.push(source);
-    this._adding = false;
-    this._expanded.add(source.source_id);
-
-    this._render();
-  }
-
-  async _save() {
-    if (!this._hass || this._saving || !this._config) {
+      this.render();
       return;
     }
 
-    this._saving = true;
-    this._render();
+    this.saving = true;
+    this.error = null;
+    this.render();
 
     try {
-      await this._hass.connection.sendMessagePromise({
+      const result = await this.hass.connection.sendMessagePromise({
         type: "dynamic_energy/save_config",
-        entry_id: this._config.entry_id,
-        observation_interval: this._interval,
-        sources: this._sources,
+        entry_id: this.config.entry_id,
+        observation_interval: Number(this.config.observation_interval || 10),
+        sources: this.sources,
       });
 
-      this._saving = false;
-      this._render();
+      if (!result?.success) {
+        throw new Error(result?.error || "Unable to save configuration.");
+      }
 
-      this.dispatchEvent(
-        new CustomEvent("dynamic-energy-saved", {
-          bubbles: true,
-          composed: true,
-        }),
-      );
+      this.saving = false;
+
+      await this.loadConfig();
     } catch (error) {
-      this._saving = false;
-      this._error = error?.message || "Unable to save configuration.";
-      this._render();
+      console.error("Dynamic Energy: failed to save configuration", error);
+
+      this.error =
+        error?.message || "Unable to save Dynamic Energy configuration.";
+
+      this.saving = false;
+      this.render();
     }
   }
 
-  _escape(value) {
-    return String(value ?? "")
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#039;");
+  updateObservationInterval(value) {
+    if (!this.config) {
+      return;
+    }
+
+    const parsed = Number(value);
+
+    if (!Number.isFinite(parsed)) {
+      return;
+    }
+
+    this.config.observation_interval = parsed;
   }
 
-  _escapeAttr(value) {
-    return this._escape(value);
-  }
+  renderSourceCard(source) {
+    const powerState = this.hass?.states?.[source.power_entity];
 
-  _styles() {
+    const energyState = this.hass?.states?.[source.energy_entity];
+
+    const power = powerState
+      ? `${powerState.state} ${
+          powerState.attributes?.unit_of_measurement || "W"
+        }`
+      : "Unavailable";
+
+    const energy = energyState
+      ? `${energyState.state} ${
+          energyState.attributes?.unit_of_measurement || "kWh"
+        }`
+      : "Unavailable";
+
     return `
-      :host {
-        display: block;
-        min-height: 100%;
-        background:
-          var(
-            --primary-background-color,
-            #111111
-          );
-        color:
-          var(
-            --primary-text-color,
-            #f5f5f5
-          );
-        box-sizing: border-box;
-      }
+      <article class="source-card">
+        <div class="source-card-main">
+          <div class="source-icon">
+            <ha-icon
+              icon="${this.escapeAttribute(source.icon || "mdi:flash")}"
+            ></ha-icon>
+          </div>
 
-      * {
-        box-sizing: border-box;
-      }
+          <div class="source-information">
+            <div class="source-name">
+              ${this.escapeHtml(source.name)}
+            </div>
 
-      button,
-      input,
-      select {
-        font: inherit;
-      }
+            <div class="source-entities">
+              ${this.escapeHtml(source.power_entity)}
+              <span>•</span>
+              ${this.escapeHtml(source.energy_entity)}
+            </div>
+          </div>
+        </div>
 
-      button {
-        cursor: pointer;
-      }
+        <div class="source-stats">
+          <div class="stat">
+            <span class="stat-label">
+              Power
+            </span>
 
-      .page {
-        width: min(
-          1180px,
-          calc(100% - 48px)
-        );
-        margin: 0 auto;
-        padding: 42px 0 56px;
-      }
+            <span class="stat-value">
+              ${this.escapeHtml(power)}
+            </span>
+          </div>
 
-      .header {
-        display: flex;
-        align-items: flex-end;
-        justify-content: space-between;
-        gap: 24px;
-        margin-bottom: 40px;
-      }
+          <div class="stat">
+            <span class="stat-label">
+              Energy
+            </span>
 
-      .eyebrow {
-        font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 0.16em;
-        opacity: 0.55;
-        margin-bottom: 8px;
-      }
+            <span class="stat-value">
+              ${this.escapeHtml(energy)}
+            </span>
+          </div>
 
-      h1 {
-        margin: 0;
-        font-size: 32px;
-        line-height: 1.15;
-        font-weight: 600;
-        letter-spacing: -0.025em;
-      }
+          <div class="stat">
+            <span class="stat-label">
+              Type
+            </span>
 
-      h2 {
-        margin: 0;
-        font-size: 20px;
-        font-weight: 600;
-      }
+            <span class="stat-value">
+              ${
+                source.energy_type === "cumulative"
+                  ? "Cumulative"
+                  : "Monthly reset"
+              }
+            </span>
+          </div>
+        </div>
 
-      h3 {
-        margin: 0;
-        font-size: 16px;
-        font-weight: 600;
-      }
+        <div class="source-actions">
+          <button
+            class="icon-button"
+            data-action="edit"
+            data-source-id="${this.escapeAttribute(source.source_id)}"
+            title="Edit"
+          >
+            <ha-icon
+              icon="mdi:pencil"
+            ></ha-icon>
+          </button>
 
-      p {
-        margin: 7px 0 0;
-        color:
-          var(
-            --secondary-text-color,
-            #9b9b9b
-          );
-        font-size: 14px;
-        line-height: 1.5;
-      }
+          <button
+            class="icon-button danger"
+            data-action="remove"
+            data-source-id="${this.escapeAttribute(source.source_id)}"
+            title="Remove"
+          >
+            <ha-icon
+              icon="mdi:delete-outline"
+            ></ha-icon>
+          </button>
+        </div>
+      </article>
+    `;
+  }
 
-      .section {
-        margin-bottom: 40px;
-      }
+  renderModal() {
+    if (!this.modalOpen) {
+      return "";
+    }
 
-      .section-heading {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-end;
-        gap: 20px;
-        margin-bottom: 16px;
-      }
+    const form = this.currentForm;
+    const editing = Boolean(this.editingId);
 
-      .monitoring-card,
-      .plug-card,
-      .add-card,
-      .empty-card {
-        border: 1px solid
-          var(
-            --divider-color,
-            rgba(255,255,255,0.09)
-          );
-        background:
-          var(
-            --card-background-color,
-            rgba(255,255,255,0.035)
-          );
-        border-radius: 16px;
-        overflow: hidden;
-      }
+    return `
+      <div class="modal-backdrop">
+        <div
+          class="modal"
+          role="dialog"
+          aria-modal="true"
+        >
 
-      .monitoring-card {
-        min-height: 82px;
-        padding: 18px 20px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 20px;
-      }
+          <div class="modal-header">
+            <div>
+              <h2>
+                ${editing ? "Edit smart plug" : "Add smart plug"}
+              </h2>
 
-      .setting-info {
-        display: flex;
-        align-items: center;
-        gap: 14px;
-      }
+              <p>
+                ${
+                  editing
+                    ? "Update the device used for energy monitoring."
+                    : "Add a new device to energy monitoring."
+                }
+              </p>
+            </div>
 
-      .setting-info span {
-        display: block;
-        margin-top: 4px;
-        font-size: 13px;
-        color:
-          var(
-            --secondary-text-color,
-            #9b9b9b
-          );
-      }
+            <button
+              class="close-button"
+              data-action="close-modal"
+              aria-label="Close"
+            >
+              <ha-icon
+                icon="mdi:close"
+              ></ha-icon>
+            </button>
+          </div>
 
-      .setting-icon,
-      .plug-icon {
-        width: 42px;
-        height: 42px;
-        display: grid;
-        place-items: center;
-        border-radius: 12px;
-        background:
-          var(
-            --secondary-background-color,
-            rgba(255,255,255,0.07)
-          );
-        font-size: 19px;
-      }
+          <div class="modal-content">
 
-      select,
-      input {
-        width: 100%;
-        min-height: 44px;
-        border: 1px solid
-          var(
-            --divider-color,
-            rgba(255,255,255,0.12)
-          );
-        border-radius: 10px;
-        background:
-          var(
-            --secondary-background-color,
-            rgba(255,255,255,0.06)
-          );
-        color:
-          var(
-            --primary-text-color,
-            #f5f5f5
-          );
-        padding: 0 13px;
-        outline: none;
-      }
+            <div class="field full-width">
+              <label for="source-name">
+                Name
+              </label>
 
-      select:focus,
-      input:focus {
-        border-color:
-          var(
-            --primary-color,
-            #03a9f4
-          );
-        box-shadow:
-          0 0 0 2px
-          color-mix(
-            in srgb,
-            var(--primary-color, #03a9f4) 18%,
-            transparent
-          );
-      }
+              <input
+                id="source-name"
+                type="text"
+                value="${this.escapeAttribute(form.name)}"
+                placeholder="e.g. Bedroom Matter Plug"
+                data-field="name"
+              />
+            </div>
 
-      .monitoring-card select {
-        width: 150px;
-      }
+            <div class="field-grid">
 
-      .plug-list {
-        display: grid;
-        gap: 10px;
-      }
+              <div class="field">
+                <label for="power-entity">
+                  Power sensor
+                </label>
 
-      .plug-card {
-        transition:
-          border-color 160ms ease,
-          background 160ms ease;
-      }
+                <select
+                  id="power-entity"
+                  data-field="power_entity"
+                >
+                  <option value="">
+                    Select power sensor
+                  </option>
 
-      .plug-card.expanded {
-        border-color:
-          color-mix(
-            in srgb,
-            var(--primary-color, #03a9f4) 35%,
-            var(--divider-color, rgba(255,255,255,0.1))
-          );
-      }
+                  ${this.powerEntities
+                    .map(
+                      (entity) => `
+                        <option
+                          value="${this.escapeAttribute(entity.entity_id)}"
+                          ${
+                            form.power_entity === entity.entity_id
+                              ? "selected"
+                              : ""
+                          }
+                        >
+                          ${this.escapeHtml(this.formatEntityOption(entity))}
+                        </option>
+                      `,
+                    )
+                    .join("")}
+                </select>
+              </div>
 
-      .plug-header {
-        width: 100%;
-        border: 0;
-        background: transparent;
-        color: inherit;
-        padding: 15px 17px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 18px;
-        text-align: left;
-      }
+              <div class="field">
+                <label for="energy-entity">
+                  Energy sensor
+                </label>
 
-      .plug-identity {
-        display: flex;
-        align-items: center;
-        gap: 13px;
-        min-width: 0;
-      }
+                <select
+                  id="energy-entity"
+                  data-field="energy_entity"
+                >
+                  <option value="">
+                    Select energy sensor
+                  </option>
 
-      .plug-identity > div:last-child {
-        min-width: 0;
-      }
+                  ${this.energyEntities
+                    .map(
+                      (entity) => `
+                        <option
+                          value="${this.escapeAttribute(entity.entity_id)}"
+                          ${
+                            form.energy_entity === entity.entity_id
+                              ? "selected"
+                              : ""
+                          }
+                        >
+                          ${this.escapeHtml(this.formatEntityOption(entity))}
+                        </option>
+                      `,
+                    )
+                    .join("")}
+                </select>
+              </div>
 
-      .plug-identity h3,
-      .plug-identity p {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
+              <div class="field">
+                <label for="energy-type">
+                  Energy type
+                </label>
 
-      .plug-identity p {
-        font-size: 12px;
-      }
+                <select
+                  id="energy-type"
+                  data-field="energy_type"
+                >
+                  <option
+                    value="monthly"
+                    ${form.energy_type === "monthly" ? "selected" : ""}
+                  >
+                    Monthly reset
+                  </option>
 
-      .header-actions {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        flex-shrink: 0;
-      }
+                  <option
+                    value="cumulative"
+                    ${form.energy_type === "cumulative" ? "selected" : ""}
+                  >
+                    Cumulative
+                  </option>
+                </select>
+              </div>
 
-      .energy-badge {
-        border-radius: 999px;
-        padding: 5px 9px;
-        font-size: 11px;
-        font-weight: 600;
-        background:
-          var(
-            --secondary-background-color,
-            rgba(255,255,255,0.07)
-          );
-      }
+              <div class="field">
+                <label for="source-icon">
+                  Icon
+                </label>
 
-      .energy-badge.cumulative {
-        color:
-          var(
-            --primary-color,
-            #03a9f4
-          );
-      }
+                <input
+                  id="source-icon"
+                  type="text"
+                  value="${this.escapeAttribute(form.icon)}"
+                  placeholder="mdi:flash"
+                  data-field="icon"
+                />
+              </div>
 
-      .chevron {
-        width: 24px;
-        text-align: center;
-        opacity: 0.65;
-        font-size: 18px;
-      }
+            </div>
 
-      .editor,
-      .add-card {
-        padding: 0 20px 20px;
-      }
+            ${
+              this.error
+                ? `
+                  <div class="error-message">
+                    <ha-icon
+                      icon="mdi:alert-circle-outline"
+                    ></ha-icon>
 
-      .form-grid {
-        display: grid;
-        grid-template-columns:
-          repeat(2, minmax(0, 1fr));
-        gap: 16px;
-        padding-top: 4px;
-      }
+                    <span>
+                      ${this.escapeHtml(this.error)}
+                    </span>
+                  </div>
+                `
+                : ""
+            }
 
-      .field {
-        display: flex;
-        flex-direction: column;
-        gap: 7px;
-      }
+          </div>
 
-      .field.full {
-        grid-column: 1 / -1;
-      }
+          <div class="modal-footer">
+            <button
+              class="secondary-button"
+              data-action="close-modal"
+            >
+              Cancel
+            </button>
 
-      .field > span {
-        font-size: 12px;
-        font-weight: 600;
-        opacity: 0.75;
-      }
+            <button
+              class="primary-button"
+              data-action="submit-source"
+            >
+              ${editing ? "Save smart plug" : "Add smart plug"}
+            </button>
+          </div>
 
-      .editor-footer {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 12px;
-        margin-top: 22px;
-        padding-top: 18px;
-        border-top: 1px solid
-          var(
-            --divider-color,
-            rgba(255,255,255,0.08)
-          );
-      }
+        </div>
+      </div>
+    `;
+  }
 
-      .add-card {
-        margin-top: 12px;
-        border-color:
-          color-mix(
-            in srgb,
-            var(--primary-color, #03a9f4) 35%,
-            var(--divider-color, rgba(255,255,255,0.1))
-          );
-      }
+  render() {
+    if (!this.shadowRoot) {
+      return;
+    }
 
-      .add-header {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        margin-bottom: 20px;
-      }
-
-      .secondary,
-      .primary,
-      .danger,
-      .save-button {
-        min-height: 40px;
-        border-radius: 10px;
-        padding: 0 15px;
-        border: 0;
-        font-weight: 600;
-        font-size: 13px;
-      }
-
-      .secondary {
-        background:
-          var(
-            --secondary-background-color,
-            rgba(255,255,255,0.07)
-          );
-        color: inherit;
-      }
-
-      .primary,
-      .save-button {
-        background:
-          var(
-            --primary-color,
-            #03a9f4
-          );
-        color:
-          var(
-            --text-primary-color,
-            white
-          );
-      }
-
-      .save-button {
-        min-width: 132px;
-      }
-
-      .save-button:disabled,
-      .primary:disabled {
-        opacity: 0.6;
-        cursor: default;
-      }
-
-      .danger {
-        color:
-          var(
-            --error-color,
-            #f44336
-          );
-        background: transparent;
-        padding-left: 0;
-      }
-
-      .icon-button {
-        width: 36px;
-        height: 36px;
-        border: 0;
-        border-radius: 50%;
-        background:
-          var(
-            --secondary-background-color,
-            rgba(255,255,255,0.07)
-          );
-        color: inherit;
-        font-size: 23px;
-      }
-
-      .plus {
-        font-size: 18px;
-        margin-right: 5px;
-      }
-
-      .empty-card {
-        text-align: center;
-        padding: 46px 20px;
-      }
-
-      .empty-icon {
-        font-size: 30px;
-        margin-bottom: 12px;
-      }
-
-      .empty-card button {
-        margin-top: 20px;
-      }
-
-      .footer {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 20px;
-        padding-top: 10px;
-        color:
-          var(
-            --secondary-text-color,
-            #9b9b9b
-          );
-        font-size: 13px;
-      }
-
-      .loading {
-        min-height: 60vh;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 12px;
-        color:
-          var(
-            --secondary-text-color,
-            #9b9b9b
-          );
-      }
-
-      .spinner,
-      .button-spinner {
-        border: 2px solid
-          rgba(255,255,255,0.18);
-        border-top-color:
-          var(
-            --primary-color,
-            #03a9f4
-          );
-        border-radius: 50%;
-        animation: spin 700ms linear infinite;
-      }
-
-      .spinner {
-        width: 22px;
-        height: 22px;
-      }
-
-      .button-spinner {
-        width: 13px;
-        height: 13px;
-        display: inline-block;
-        margin-right: 7px;
-        vertical-align: -2px;
-      }
-
-      .error-card {
-        max-width: 620px;
-        margin: 100px auto;
-        padding: 24px;
-        border-radius: 16px;
-        border: 1px solid
-          var(
-            --error-color,
-            #f44336
-          );
-        display: flex;
-        gap: 16px;
-      }
-
-      .error-icon {
-        width: 34px;
-        height: 34px;
-        border-radius: 50%;
-        display: grid;
-        place-items: center;
-        background:
-          var(
-            --error-color,
-            #f44336
-          );
-        color: white;
-        font-weight: 700;
-      }
-
-      .error-card button {
-        margin-top: 18px;
-      }
-
-      @keyframes spin {
-        to {
-          transform: rotate(360deg);
+    this.shadowRoot.innerHTML = `
+      <style>
+        :host {
+          display: block;
+          min-height: 100%;
+          color: var(--primary-text-color);
+          background: var(--primary-background-color);
         }
-      }
 
-      @media (max-width: 700px) {
+        * {
+          box-sizing: border-box;
+        }
+
         .page {
-          width: min(
-            100% - 28px,
-            1180px
-          );
-          padding-top: 24px;
+          width: min(1180px, 100%);
+          margin: 0 auto;
+          padding: 36px 28px 56px;
         }
 
-        .header,
-        .section-heading {
-          align-items: stretch;
-          flex-direction: column;
-        }
-
-        .header .save-button {
-          width: 100%;
-        }
-
-        .monitoring-card {
-          align-items: stretch;
-          flex-direction: column;
-        }
-
-        .monitoring-card select {
-          width: 100%;
-        }
-
-        .form-grid {
-          grid-template-columns: 1fr;
-        }
-
-        .field.full {
-          grid-column: auto;
-        }
-
-        .plug-header {
+        .header {
+          display: flex;
           align-items: flex-start;
+          justify-content: space-between;
+          gap: 24px;
+          margin-bottom: 34px;
+        }
+
+        .header-left {
+          display: flex;
+          align-items: flex-start;
+          gap: 14px;
+          min-width: 0;
+        }
+
+        .header-brand {
+          display: flex;
+          align-items: center;
+          gap: 16px;
+          min-width: 0;
+        }
+
+        .logo {
+          width: 52px;
+          height: 52px;
+          flex-shrink: 0;
+          object-fit: contain;
+          border-radius: 14px;
+        }
+
+        .back-button {
+          width: 42px;
+          height: 42px;
+          margin-top: 3px;
+          flex-shrink: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 11px;
+          background: var(--secondary-background-color);
+          color: var(--primary-text-color);
+        }
+
+        .back-button:hover {
+          background: var(--divider-color);
+        }
+
+        .back-button ha-icon {
+          --mdc-icon-size: 22px;
+        }
+
+        .title-block {
+          min-width: 0;
+        }
+
+        .title-block h1 {
+          margin: 0;
+          font-size: 32px;
+          line-height: 1.2;
+          font-weight: 650;
+          letter-spacing: -0.02em;
+        }
+
+        .title-block p {
+          margin: 10px 0 0;
+          color: var(--secondary-text-color);
+          font-size: 16px;
+          line-height: 1.5;
         }
 
         .header-actions {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          flex-shrink: 0;
+        }
+
+        button {
+          font: inherit;
+          border: 0;
+          cursor: pointer;
+        }
+
+        .primary-button {
+          min-height: 46px;
+          padding: 0 22px;
+          border-radius: 12px;
+          background: var(--primary-color);
+          color: var(--text-primary-color, #fff);
+          font-weight: 600;
+          transition:
+            transform 120ms ease,
+            opacity 120ms ease;
+        }
+
+        .primary-button:hover {
+          transform: translateY(-1px);
+        }
+
+        .primary-button:disabled {
+          opacity: 0.55;
+          cursor: default;
+          transform: none;
+        }
+
+        .secondary-button {
+          min-height: 46px;
+          padding: 0 20px;
+          border-radius: 12px;
+          background: var(--secondary-background-color);
+          color: var(--primary-text-color);
+          font-weight: 600;
+        }
+
+        .settings-card {
+          background: var(--card-background-color);
+          border: 1px solid var(--divider-color);
+          border-radius: 18px;
+          padding: 26px 28px;
+          margin-bottom: 28px;
+        }
+
+        .settings-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 20px;
+        }
+
+        .settings-title {
+          font-size: 18px;
+          font-weight: 650;
+        }
+
+        .settings-description {
+          margin-top: 5px;
+          color: var(--secondary-text-color);
+          font-size: 14px;
+        }
+
+        .interval-select {
+          min-width: 180px;
+          height: 44px;
+          padding: 0 14px;
+          border: 1px solid var(--divider-color);
+          border-radius: 10px;
+          background: var(--primary-background-color);
+          color: var(--primary-text-color);
+          font: inherit;
+        }
+
+        .section-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 20px;
+          margin-bottom: 20px;
+        }
+
+        .section-title {
+          font-size: 20px;
+          font-weight: 650;
+        }
+
+        .source-count {
+          color: var(--secondary-text-color);
+          font-size: 14px;
+          margin-top: 4px;
+        }
+
+        .sources {
+          display: flex;
           flex-direction: column;
-          gap: 5px;
+          gap: 14px;
         }
 
-        .energy-badge {
-          display: none;
+        .source-card {
+          display: grid;
+          grid-template-columns:
+            minmax(220px, 1fr)
+            auto
+            auto;
+          align-items: center;
+          gap: 24px;
+          min-height: 88px;
+          padding: 18px 20px;
+          border: 1px solid var(--divider-color);
+          border-radius: 15px;
+          background: var(--card-background-color);
         }
 
-        .editor-footer,
-        .footer {
-          align-items: stretch;
+        .source-card-main {
+          display: flex;
+          align-items: center;
+          gap: 16px;
+          min-width: 0;
+        }
+
+        .source-icon {
+          width: 44px;
+          height: 44px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          flex-shrink: 0;
+          border-radius: 12px;
+          background: color-mix(
+            in srgb,
+            var(--primary-color) 14%,
+            transparent
+          );
+          color: var(--primary-color);
+        }
+
+        .source-icon ha-icon {
+          --mdc-icon-size: 22px;
+        }
+
+        .source-information {
+          min-width: 0;
+        }
+
+        .source-name {
+          font-size: 16px;
+          font-weight: 600;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .source-entities {
+          margin-top: 5px;
+          color: var(--secondary-text-color);
+          font-size: 12px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .source-entities span {
+          margin: 0 5px;
+        }
+
+        .source-stats {
+          display: flex;
+          gap: 28px;
+        }
+
+        .stat {
+          display: flex;
           flex-direction: column;
+          gap: 4px;
+          min-width: 82px;
         }
 
-        .editor-footer button,
-        .footer button {
+        .stat-label {
+          color: var(--secondary-text-color);
+          font-size: 11px;
+          text-transform: uppercase;
+          letter-spacing: 0.06em;
+        }
+
+        .stat-value {
+          font-size: 13px;
+          font-weight: 600;
+        }
+
+        .source-actions {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+
+        .icon-button {
+          width: 40px;
+          height: 40px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 10px;
+          background: transparent;
+          color: var(--secondary-text-color);
+        }
+
+        .icon-button:hover {
+          background: var(--secondary-background-color);
+          color: var(--primary-text-color);
+        }
+
+        .icon-button.danger:hover {
+          color: var(--error-color);
+        }
+
+        .empty-state {
+          padding: 48px 24px;
+          text-align: center;
+          border: 1px dashed var(--divider-color);
+          border-radius: 16px;
+          color: var(--secondary-text-color);
+        }
+
+        .empty-icon {
+          margin-bottom: 12px;
+          color: var(--primary-color);
+        }
+
+        .empty-icon ha-icon {
+          --mdc-icon-size: 38px;
+        }
+
+        .empty-title {
+          color: var(--primary-text-color);
+          font-size: 17px;
+          font-weight: 600;
+        }
+
+        .empty-description {
+          max-width: 480px;
+          margin: 8px auto 0;
+          line-height: 1.5;
+        }
+
+        .page-footer {
+          display: flex;
+          justify-content: flex-end;
+          align-items: center;
+          gap: 16px;
+          margin-top: 32px;
+        }
+
+        .error-message {
+          display: flex;
+          align-items: flex-start;
+          gap: 10px;
+          padding: 13px 15px;
+          border-radius: 10px;
+          background: color-mix(
+            in srgb,
+            var(--error-color) 10%,
+            transparent
+          );
+          color: var(--error-color);
+          font-size: 14px;
+          line-height: 1.4;
+        }
+
+        .modal-backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 1000;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 32px;
+          background: rgba(0, 0, 0, 0.58);
+          overflow-y: auto;
+        }
+
+        .modal {
+          width: min(920px, 100%);
+          max-height: calc(100vh - 64px);
+          overflow-y: auto;
+          border: 1px solid color-mix(
+            in srgb,
+            var(--primary-color) 55%,
+            var(--divider-color)
+          );
+          border-radius: 20px;
+          background: var(--card-background-color);
+          box-shadow:
+            0 24px 80px rgba(0, 0, 0, 0.4);
+        }
+
+        .modal-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 24px;
+          padding: 30px 32px 10px;
+        }
+
+        .modal-header h2 {
+          margin: 0;
+          font-size: 24px;
+          line-height: 1.25;
+          font-weight: 650;
+        }
+
+        .modal-header p {
+          margin: 9px 0 0;
+          color: var(--secondary-text-color);
+          font-size: 15px;
+          line-height: 1.5;
+        }
+
+        .close-button {
+          width: 48px;
+          height: 48px;
+          flex-shrink: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 50%;
+          background: var(--secondary-background-color);
+          color: var(--primary-text-color);
+        }
+
+        .close-button:hover {
+          background: var(--divider-color);
+        }
+
+        .close-button ha-icon {
+          --mdc-icon-size: 24px;
+        }
+
+        .modal-content {
+          padding: 28px 32px 32px;
+        }
+
+        .field-grid {
+          display: grid;
+          grid-template-columns:
+            minmax(0, 1fr)
+            minmax(0, 1fr);
+          column-gap: 24px;
+          row-gap: 26px;
+          margin-top: 26px;
+        }
+
+        .field {
+          min-width: 0;
+        }
+
+        .field.full-width {
           width: 100%;
         }
 
-        .secondary {
-          width: 100%;
+        .field label {
+          display: block;
+          margin-bottom: 10px;
+          color: var(--primary-text-color);
+          font-size: 14px;
+          font-weight: 600;
         }
-      }
+
+        .field input,
+        .field select {
+          width: 100%;
+          height: 50px;
+          padding: 0 16px;
+          border: 1px solid var(--divider-color);
+          border-radius: 12px;
+          outline: none;
+          background: var(--secondary-background-color);
+          color: var(--primary-text-color);
+          font: inherit;
+          font-size: 15px;
+          transition:
+            border-color 120ms ease,
+            box-shadow 120ms ease;
+        }
+
+        .field select {
+          padding-right: 40px;
+          cursor: pointer;
+        }
+
+        .field input::placeholder {
+          color: var(--secondary-text-color);
+          opacity: 0.7;
+        }
+
+        .field input:focus,
+        .field select:focus {
+          border-color: var(--primary-color);
+          box-shadow:
+            0 0 0 3px color-mix(
+              in srgb,
+              var(--primary-color) 16%,
+              transparent
+            );
+        }
+
+        .modal-content > .error-message {
+          margin-top: 26px;
+        }
+
+        .modal-footer {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 18px;
+          padding: 20px 32px 30px;
+          border-top: 1px solid var(--divider-color);
+        }
+
+        .modal-footer .primary-button {
+          min-width: 170px;
+        }
+
+        .loading {
+          display: flex;
+          justify-content: center;
+          padding: 80px 20px;
+          color: var(--secondary-text-color);
+        }
+
+        @media (max-width: 800px) {
+          .page {
+            padding: 24px 18px 40px;
+          }
+
+          .header {
+            flex-direction: column;
+            margin-bottom: 26px;
+          }
+
+          .header-actions {
+            width: 100%;
+          }
+
+          .header-actions .primary-button {
+            width: 100%;
+          }
+
+          .settings-header,
+          .section-header {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+
+          .interval-select {
+            width: 100%;
+          }
+
+          .source-card {
+            grid-template-columns: 1fr auto;
+            gap: 16px;
+          }
+
+          .source-stats {
+            grid-column: 1 / -1;
+            padding-left: 60px;
+            gap: 20px;
+            flex-wrap: wrap;
+          }
+
+          .source-actions {
+            grid-column: 2;
+            grid-row: 1;
+          }
+
+          .page-footer {
+            justify-content: stretch;
+          }
+
+          .page-footer button {
+            flex: 1;
+          }
+
+          .modal-backdrop {
+            align-items: flex-start;
+            padding: 14px;
+          }
+
+          .modal {
+            max-height: calc(100vh - 28px);
+            border-radius: 16px;
+          }
+
+          .modal-header {
+            padding: 24px 22px 8px;
+          }
+
+          .modal-content {
+            padding: 22px;
+          }
+
+          .field-grid {
+            grid-template-columns: 1fr;
+            row-gap: 22px;
+            margin-top: 22px;
+          }
+
+          .modal-footer {
+            padding: 18px 22px 22px;
+            flex-direction: column-reverse;
+            align-items: stretch;
+          }
+
+          .modal-footer button {
+            width: 100%;
+          }
+        }
+
+        @media (max-width: 520px) {
+          .header-brand {
+            gap: 12px;
+          }
+
+          .logo {
+            width: 44px;
+            height: 44px;
+          }
+
+          .title-block h1 {
+            font-size: 27px;
+          }
+
+          .title-block p {
+            font-size: 14px;
+          }
+
+          .settings-card {
+            padding: 20px;
+          }
+
+          .source-card {
+            padding: 16px;
+          }
+
+          .source-stats {
+            padding-left: 0;
+          }
+
+          .source-actions {
+            grid-column: 1 / -1;
+            justify-content: flex-end;
+          }
+        }
+      </style>
+
+      <div class="page">
+
+        ${
+          this.loading
+            ? `
+              <div class="loading">
+                Loading Dynamic Energy…
+              </div>
+            `
+            : `
+              <header class="header">
+
+                <div class="header-left">
+
+                  <button
+                    class="back-button"
+                    data-action="back"
+                    title="Back"
+                    aria-label="Back"
+                  >
+                    <ha-icon
+                      icon="mdi:arrow-left"
+                    ></ha-icon>
+                  </button>
+
+                  <div class="header-brand">
+
+                    <img
+                      class="logo"
+                      src="${this.escapeAttribute(this.getLogoUrl())}"
+                      alt="Dynamic Energy"
+                    />
+
+                    <div class="title-block">
+                      <h1>Dynamic Energy</h1>
+
+                      <p>
+                        Configure the devices used for apartment energy monitoring.
+                      </p>
+                    </div>
+
+                  </div>
+
+                </div>
+
+                <div class="header-actions">
+                  <button
+                    class="primary-button"
+                    data-action="add"
+                  >
+                    Add smart plug
+                  </button>
+                </div>
+
+              </header>
+
+              <section class="settings-card">
+
+                <div class="settings-header">
+
+                  <div>
+                    <div class="settings-title">
+                      Monitoring interval
+                    </div>
+
+                    <div class="settings-description">
+                      How frequently Dynamic Energy samples power usage.
+                    </div>
+                  </div>
+
+                  <select
+                    class="interval-select"
+                    id="observation-interval"
+                  >
+                    ${[5, 10, 15, 20, 30, 45, 60]
+                      .map(
+                        (value) => `
+                          <option
+                            value="${value}"
+                            ${
+                              Number(this.config?.observation_interval) ===
+                              value
+                                ? "selected"
+                                : ""
+                            }
+                          >
+                            Every ${value} seconds
+                          </option>
+                        `,
+                      )
+                      .join("")}
+                  </select>
+
+                </div>
+
+              </section>
+
+              <section>
+
+                <div class="section-header">
+
+                  <div>
+                    <div class="section-title">
+                      Smart plugs
+                    </div>
+
+                    <div class="source-count">
+                      ${this.sources.length}
+                      ${
+                        this.sources.length === 1 ? "smart plug" : "smart plugs"
+                      }
+                    </div>
+                  </div>
+
+                </div>
+
+                ${
+                  this.sources.length
+                    ? `
+                      <div class="sources">
+                        ${this.sources
+                          .map((source) => this.renderSourceCard(source))
+                          .join("")}
+                      </div>
+                    `
+                    : `
+                      <div class="empty-state">
+
+                        <div class="empty-icon">
+                          <ha-icon
+                            icon="mdi:flash-outline"
+                          ></ha-icon>
+                        </div>
+
+                        <div class="empty-title">
+                          No smart plugs configured
+                        </div>
+
+                        <div class="empty-description">
+                          Add your first smart plug to start monitoring
+                          device-level energy consumption.
+                        </div>
+
+                        <div style="margin-top: 22px;">
+                          <button
+                            class="primary-button"
+                            data-action="add"
+                          >
+                            Add smart plug
+                          </button>
+                        </div>
+
+                      </div>
+                    `
+                }
+
+              </section>
+
+              ${
+                this.error && !this.modalOpen
+                  ? `
+                    <div
+                      class="error-message"
+                      style="margin-top: 24px;"
+                    >
+                      <ha-icon
+                        icon="mdi:alert-circle-outline"
+                      ></ha-icon>
+
+                      <span>
+                        ${this.escapeHtml(this.error)}
+                      </span>
+                    </div>
+                  `
+                  : ""
+              }
+
+              <div class="page-footer">
+                <button
+                  class="secondary-button"
+                  data-action="back"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  class="primary-button"
+                  data-action="save"
+                  ${this.saving ? "disabled" : ""}
+                >
+                  ${this.saving ? "Saving…" : "Save changes"}
+                </button>
+              </div>
+            `
+        }
+
+      </div>
+
+      ${this.renderModal()}
     `;
+
+    this.attachEventListeners();
+  }
+
+  attachEventListeners() {
+    this.shadowRoot?.querySelectorAll("[data-action]").forEach((element) => {
+      element.addEventListener("click", (event) => {
+        const action = event.currentTarget.dataset.action;
+
+        const sourceId = event.currentTarget.dataset.sourceId;
+
+        if (action === "add") {
+          this.openAdd();
+          return;
+        }
+
+        if (action === "back") {
+          this.goBack();
+          return;
+        }
+
+        if (action === "close-modal") {
+          this.closeModal();
+          return;
+        }
+
+        if (action === "submit-source") {
+          this.submitSource();
+          return;
+        }
+
+        if (action === "save") {
+          this.saveChanges();
+          return;
+        }
+
+        if (action === "edit") {
+          const source = this.sources.find(
+            (item) => item.source_id === sourceId,
+          );
+
+          if (source) {
+            this.openEdit(source);
+          }
+
+          return;
+        }
+
+        if (action === "remove") {
+          const source = this.sources.find(
+            (item) => item.source_id === sourceId,
+          );
+
+          if (source) {
+            this.removeSource(source);
+          }
+        }
+      });
+    });
+
+    this.shadowRoot
+      ?.querySelector("#observation-interval")
+      ?.addEventListener("change", (event) => {
+        this.updateObservationInterval(event.target.value);
+      });
+
+    this.shadowRoot?.querySelectorAll("[data-field]").forEach((element) => {
+      element.addEventListener("input", (event) => {
+        this.updateForm(event.target.dataset.field, event.target.value);
+      });
+
+      element.addEventListener("change", (event) => {
+        this.updateForm(event.target.dataset.field, event.target.value);
+      });
+    });
+
+    this.shadowRoot
+      ?.querySelector(".modal-backdrop")
+      ?.addEventListener("click", (event) => {
+        if (event.target.classList.contains("modal-backdrop")) {
+          this.closeModal();
+        }
+      });
+  }
+
+  escapeHtml(value) {
+    const div = document.createElement("div");
+
+    div.textContent = String(value ?? "");
+
+    return div.innerHTML;
+  }
+
+  escapeAttribute(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/"/g, "&quot;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
   }
 }
 

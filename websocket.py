@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from typing import Any
-from uuid import uuid4
 
 import voluptuous as vol
 from homeassistant.components import websocket_api
@@ -12,10 +11,10 @@ from .const import (
     CONF_ENERGY_ENTITY,
     CONF_ENERGY_TYPE,
     CONF_ICON,
+    CONF_NAME,
     CONF_OBSERVATION_INTERVAL,
     CONF_POWER_ENTITY,
     CONF_SOURCE_ID,
-    CONF_SOURCE_NAME,
     CONF_SOURCES,
     DOMAIN,
     ENERGY_TYPE_CUMULATIVE,
@@ -30,7 +29,12 @@ from .const import (
 
 def _get_entry(
     hass: HomeAssistant,
+    entry_id: str | None = None,
 ) -> ConfigEntry | None:
+    """Return the Dynamic Energy config entry."""
+    if entry_id:
+        return hass.config_entries.async_get_entry(entry_id)
+
     entries = hass.config_entries.async_entries(DOMAIN)
 
     if not entries:
@@ -39,137 +43,80 @@ def _get_entry(
     return entries[0]
 
 
-def _fingerprint(
-    source: dict[str, Any],
-) -> str:
+def _fingerprint(source: dict[str, Any]) -> str:
+    """Create a stable fingerprint for a source."""
     return SOURCE_FINGERPRINT_SEPARATOR.join(
         [
-            str(
-                source.get(
-                    CONF_POWER_ENTITY,
-                    "",
-                )
-            ),
-            str(
-                source.get(
-                    CONF_ENERGY_ENTITY,
-                    "",
-                )
-            ),
-            str(
-                source.get(
-                    CONF_ENERGY_TYPE,
-                    "",
-                )
-            ),
+            source[CONF_POWER_ENTITY],
+            source[CONF_ENERGY_ENTITY],
+            source[CONF_ENERGY_TYPE],
         ]
     )
 
 
-def _normalise_source(
-    source: dict[str, Any],
-    *,
-    source_id: str | None = None,
-) -> dict[str, Any]:
-    result = {
-        CONF_SOURCE_ID: source_id or str(uuid4()),
-        CONF_SOURCE_NAME: str(
-            source.get(
-                CONF_SOURCE_NAME,
-                "",
-            )
+def _normalise_source(source: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a source received from the frontend."""
+    import uuid
+
+    source_id = source.get(CONF_SOURCE_ID)
+
+    if not source_id:
+        source_id = str(uuid.uuid4())
+
+    normalized = {
+        CONF_SOURCE_ID: str(source_id),
+        CONF_NAME: str(source.get(CONF_NAME, "")).strip(),
+        CONF_POWER_ENTITY: str(source.get(CONF_POWER_ENTITY, "")).strip(),
+        CONF_ENERGY_ENTITY: str(source.get(CONF_ENERGY_ENTITY, "")).strip(),
+        CONF_ENERGY_TYPE: str(
+            source.get(CONF_ENERGY_TYPE, ENERGY_TYPE_MONTHLY)
         ).strip(),
-        CONF_POWER_ENTITY: str(
-            source.get(
-                CONF_POWER_ENTITY,
-                "",
-            )
-        ),
-        CONF_ENERGY_ENTITY: str(
-            source.get(
-                CONF_ENERGY_ENTITY,
-                "",
-            )
-        ),
-        CONF_ENERGY_TYPE: source.get(
-            CONF_ENERGY_TYPE,
-            ENERGY_TYPE_MONTHLY,
-        ),
-        CONF_ICON: str(
-            source.get(
-                CONF_ICON,
-                "",
-            )
-        ).strip(),
+        CONF_ICON: str(source.get(CONF_ICON, "mdi:flash")).strip() or "mdi:flash",
     }
 
-    result["fingerprint"] = _fingerprint(result)
+    normalized["fingerprint"] = _fingerprint(normalized)
 
-    return result
+    return normalized
 
 
 def _validate_sources(
     sources: list[dict[str, Any]],
-) -> str | None:
+) -> None:
+    """Validate configured energy sources."""
     names: set[str] = set()
     fingerprints: set[str] = set()
 
     for source in sources:
-        name = str(
-            source.get(
-                CONF_SOURCE_NAME,
-                "",
-            )
-        ).strip()
-
-        power_entity = source.get(CONF_POWER_ENTITY)
-
-        energy_entity = source.get(CONF_ENERGY_ENTITY)
-
-        energy_type = source.get(CONF_ENERGY_TYPE)
+        name = source[CONF_NAME]
 
         if not name:
-            return "invalid_source"
+            raise vol.Invalid("Every smart plug must have a name.")
 
-        if not power_entity:
-            return "invalid_source"
+        if not source[CONF_POWER_ENTITY]:
+            raise vol.Invalid(f"Smart plug '{name}' is missing a power sensor.")
 
-        if not energy_entity:
-            return "invalid_source"
+        if not source[CONF_ENERGY_ENTITY]:
+            raise vol.Invalid(f"Smart plug '{name}' is missing an energy sensor.")
 
-        if energy_type not in (
+        if source[CONF_ENERGY_TYPE] not in {
             ENERGY_TYPE_MONTHLY,
             ENERGY_TYPE_CUMULATIVE,
-        ):
-            return "invalid_source"
+        }:
+            raise vol.Invalid(f"Smart plug '{name}' has an invalid energy type.")
 
-        normalized_name = name.casefold()
+        name_key = name.casefold()
 
-        if normalized_name in names:
-            return "duplicate_source_name"
+        if name_key in names:
+            raise vol.Invalid(f"Duplicate smart plug name: {name}")
 
-        names.add(normalized_name)
+        names.add(name_key)
 
-        fingerprint = _fingerprint(source)
+        fingerprint = source["fingerprint"]
 
         if fingerprint in fingerprints:
-            return "duplicate_source"
+            raise vol.Invalid(f"Duplicate sensor configuration for smart plug: {name}")
 
         fingerprints.add(fingerprint)
-
-    return None
-
-
-@callback
-def _find_source(
-    sources: list[dict[str, Any]],
-    source_id: str,
-) -> dict[str, Any] | None:
-    for source in sources:
-        if source.get(CONF_SOURCE_ID) == source_id:
-            return source
-
-    return None
 
 
 @websocket_api.websocket_command(
@@ -178,44 +125,47 @@ def _find_source(
     }
 )
 @websocket_api.require_admin
-@callback
-def websocket_get_config(
+@websocket_api.async_response
+async def websocket_get_config(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
+    """Return Dynamic Energy configuration."""
     entry = _get_entry(hass)
 
     if entry is None:
         connection.send_error(
             msg["id"],
             websocket_api.ERR_NOT_FOUND,
-            "Dynamic Energy is not configured",
+            "Dynamic Energy config entry not found",
         )
         return
 
-    sources = list(
-        entry.options.get(
-            CONF_SOURCES,
-            entry.data.get(
-                CONF_SOURCES,
-                [],
-            ),
-        )
-    )
+    sources = []
 
-    observation_interval = int(
-        entry.options.get(
-            CONF_OBSERVATION_INTERVAL,
-            10,
+    for source in entry.options.get(CONF_SOURCES, []):
+        normalized = _normalise_source(source)
+
+        sources.append(
+            {
+                CONF_SOURCE_ID: normalized[CONF_SOURCE_ID],
+                CONF_NAME: normalized[CONF_NAME],
+                CONF_POWER_ENTITY: normalized[CONF_POWER_ENTITY],
+                CONF_ENERGY_ENTITY: normalized[CONF_ENERGY_ENTITY],
+                CONF_ENERGY_TYPE: normalized[CONF_ENERGY_TYPE],
+                CONF_ICON: normalized[CONF_ICON],
+            }
         )
-    )
 
     connection.send_result(
         msg["id"],
         {
             "entry_id": entry.entry_id,
-            "observation_interval": observation_interval,
+            "observation_interval": entry.options.get(
+                CONF_OBSERVATION_INTERVAL,
+                10,
+            ),
             "sources": sources,
         },
     )
@@ -225,15 +175,13 @@ def websocket_get_config(
     {
         vol.Required("type"): WS_TYPE_SAVE_CONFIG,
         vol.Required("entry_id"): str,
-        vol.Required(CONF_OBSERVATION_INTERVAL): vol.All(
+        vol.Required("sources"): list,
+        vol.Required("observation_interval"): vol.All(
             vol.Coerce(int),
             vol.Range(
                 min=MIN_OBSERVATION_INTERVAL,
                 max=MAX_OBSERVATION_INTERVAL,
             ),
-        ),
-        vol.Required(CONF_SOURCES): vol.All(
-            list,
         ),
     }
 )
@@ -244,9 +192,13 @@ async def websocket_save_config(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    entry = hass.config_entries.async_get_entry(msg["entry_id"])
+    """Save Dynamic Energy configuration."""
+    entry = _get_entry(
+        hass,
+        msg["entry_id"],
+    )
 
-    if entry is None or entry.domain != DOMAIN:
+    if entry is None:
         connection.send_error(
             msg["id"],
             websocket_api.ERR_NOT_FOUND,
@@ -254,93 +206,46 @@ async def websocket_save_config(
         )
         return
 
-    submitted_sources = msg[CONF_SOURCES]
+    try:
+        sources = [_normalise_source(source) for source in msg["sources"]]
 
-    current_sources = list(
-        entry.options.get(
-            CONF_SOURCES,
-            entry.data.get(
-                CONF_SOURCES,
-                [],
-            ),
-        )
-    )
+        _validate_sources(sources)
 
-    current_by_id = {
-        source.get(CONF_SOURCE_ID): source
-        for source in current_sources
-        if source.get(CONF_SOURCE_ID)
-    }
-
-    normalized_sources: list[dict[str, Any]] = []
-
-    for submitted_source in submitted_sources:
-        if not isinstance(
-            submitted_source,
-            dict,
-        ):
-            connection.send_error(
-                msg["id"],
-                websocket_api.ERR_INVALID_FORMAT,
-                "Invalid smart plug configuration",
-            )
-            return
-
-        source_id = submitted_source.get(CONF_SOURCE_ID)
-
-        if source_id and source_id in current_by_id:
-            normalized = _normalise_source(
-                submitted_source,
-                source_id=source_id,
-            )
-        else:
-            normalized = _normalise_source(submitted_source)
-
-        normalized_sources.append(normalized)
-
-    validation_error = _validate_sources(normalized_sources)
-
-    if validation_error:
+    except vol.Invalid as err:
         connection.send_error(
             msg["id"],
             websocket_api.ERR_INVALID_FORMAT,
-            validation_error,
+            str(err),
         )
         return
 
-    new_options = {
-        CONF_SOURCES: normalized_sources,
-        CONF_OBSERVATION_INTERVAL: int(msg[CONF_OBSERVATION_INTERVAL]),
-    }
+    options = dict(entry.options)
+
+    options[CONF_SOURCES] = sources
+    options[CONF_OBSERVATION_INTERVAL] = int(msg["observation_interval"])
 
     hass.config_entries.async_update_entry(
         entry,
-        options=new_options,
+        options=options,
     )
 
-    reloaded = await hass.config_entries.async_reload(entry.entry_id)
-
-    if not reloaded:
-        connection.send_error(
-            msg["id"],
-            websocket_api.ERR_UNKNOWN_ERROR,
-            "Dynamic Energy could not be reloaded",
-        )
-        return
+    if entry.state.name == "LOADED":
+        await hass.config_entries.async_reload(entry.entry_id)
 
     connection.send_result(
         msg["id"],
         {
             "success": True,
-            "sources": normalized_sources,
-            "observation_interval": int(msg[CONF_OBSERVATION_INTERVAL]),
+            "entry_id": entry.entry_id,
         },
     )
 
 
+@callback
 def async_register_websocket_commands(
     hass: HomeAssistant,
 ) -> None:
+    """Register Dynamic Energy WebSocket commands."""
     websocket_api.async_register_command(
         hass,
         websocket_get_config,

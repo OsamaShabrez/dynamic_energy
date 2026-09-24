@@ -5,7 +5,8 @@ NAME = "Dynamic Energy"
 
 CONF_SOURCES = "sources"
 CONF_SOURCE_ID = "source_id"
-CONF_SOURCE_NAME = "name"
+CONF_NAME = "name"
+CONF_SOURCE_NAME = CONF_NAME
 CONF_POWER_ENTITY = "power_entity"
 CONF_ENERGY_ENTITY = "energy_entity"
 CONF_ENERGY_TYPE = "energy_type"
