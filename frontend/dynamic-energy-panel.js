@@ -341,6 +341,7 @@ class DynamicEnergyPanel extends HTMLElement {
   async saveChanges() {
     if (!this.config?.entry_id) {
       this.error = "Configuration entry ID is missing.";
+      this.render();
       return;
     }
 
@@ -352,7 +353,14 @@ class DynamicEnergyPanel extends HTMLElement {
       await this.hass.connection.sendMessagePromise({
         type: "dynamic_energy/save_config",
         entry_id: this.config.entry_id,
-        observation_interval: Number(this.config.observation_interval || 10),
+        observation_interval: Number(this.config.observation_interval ?? 3),
+        observation_window: Number(this.config.observation_window ?? 10),
+        challenge_threshold: Number(this.config.challenge_threshold ?? 5),
+        challenge_confirmations: Number(
+          this.config.challenge_confirmations ?? 2,
+        ),
+        minimum_power: Number(this.config.minimum_power ?? 3),
+        ranking_method: this.config.ranking_method || "recent_weighted",
         sources: this.sources,
       });
 
@@ -379,6 +387,28 @@ class DynamicEnergyPanel extends HTMLElement {
     }
 
     this.config.observation_interval = parsed;
+  }
+
+  updateRankingSetting(field, value) {
+    if (!this.config) {
+      return;
+    }
+
+    const parsed = Number(value);
+
+    if (!Number.isFinite(parsed)) {
+      return;
+    }
+
+    this.config[field] = parsed;
+  }
+
+  updateRankingMethod(value) {
+    if (!this.config) {
+      return;
+    }
+
+    this.config.ranking_method = value;
   }
 
   formatPower(value, unit = "W") {
@@ -881,6 +911,52 @@ class DynamicEnergyPanel extends HTMLElement {
           margin-top: 5px;
           color: var(--secondary-text-color);
           font-size: 14px;
+          line-height: 1.45;
+        }
+
+        .settings-divider {
+          height: 1px;
+          margin: 26px 0;
+          background: var(--divider-color);
+        }
+
+        .settings-section-title {
+          margin-bottom: 18px;
+          color: var(--primary-text-color);
+          font-size: 16px;
+          font-weight: 650;
+        }
+
+        .settings-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 24px 28px;
+        }
+
+        .setting {
+          min-width: 0;
+        }
+
+        .setting-label {
+          display: block;
+          margin-bottom: 5px;
+          color: var(--primary-text-color);
+          font-size: 15px;
+          font-weight: 600;
+          line-height: 1.35;
+        }
+
+        .setting-description {
+          min-height: 40px;
+          margin-bottom: 10px;
+          color: var(--secondary-text-color);
+          font-size: 13px;
+          line-height: 1.45;
+        }
+
+        .setting .interval-select {
+          width: 100%;
+          min-width: 0;
         }
 
         .interval-select {
@@ -1279,6 +1355,14 @@ class DynamicEnergyPanel extends HTMLElement {
             flex-direction: column;
           }
 
+          .settings-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .setting-description {
+            min-height: 0;
+          }
+
           .interval-select {
             width: 100%;
           }
@@ -1443,40 +1527,268 @@ class DynamicEnergyPanel extends HTMLElement {
 
               <section class="settings-card">
 
-                <div class="settings-header">
+                <div class="settings-section">
 
-                  <div>
-                    <div class="settings-title">
-                      Monitoring interval
+                  <div class="settings-header">
+
+                    <div>
+                      <div class="settings-title">
+                        Monitoring interval
+                      </div>
+
+                      <div class="settings-description">
+                        How often Dynamic Energy records a power reading for device ranking.
+                      </div>
                     </div>
 
-                    <div class="settings-description">
-                      How frequently Dynamic Energy samples power usage.
-                    </div>
+                    <select
+                      class="interval-select"
+                      id="observation-interval"
+                    >
+                      ${[1, 2, 3, 5, 10, 15, 20, 30]
+                        .map(
+                          (value) => `
+                            <option
+                              value="${value}"
+                              ${
+                                Number(
+                                  this.config?.observation_interval ?? 3,
+                                ) === value
+                                  ? "selected"
+                                  : ""
+                              }
+                            >
+                              Every ${value} seconds
+                            </option>
+                          `,
+                        )
+                        .join("")}
+                    </select>
+
                   </div>
 
-                  <select
-                    class="interval-select"
-                    id="observation-interval"
-                  >
-                    ${[5, 10, 15, 20, 30, 45, 60]
-                      .map(
-                        (value) => `
-                          <option
-                            value="${value}"
-                            ${
-                              Number(this.config?.observation_interval) ===
-                              value
-                                ? "selected"
-                                : ""
-                            }
-                          >
-                            Every ${value} seconds
-                          </option>
-                        `,
-                      )
-                      .join("")}
-                  </select>
+                </div>
+
+                <div class="settings-divider"></div>
+
+                <div class="settings-section">
+
+                  <div class="settings-section-title">
+                    Ranking
+                  </div>
+
+                  <div class="settings-grid">
+
+                    <div class="setting">
+
+                      <label
+                        class="setting-label"
+                        for="observation-window"
+                      >
+                        Observation window
+                      </label>
+
+                      <div class="setting-description">
+                        Recent power history used when ranking devices.
+                      </div>
+
+                      <select
+                        class="interval-select"
+                        id="observation-window"
+                      >
+                        ${[5, 10, 15, 20, 30, 45, 60]
+                          .map(
+                            (value) => `
+                              <option
+                                value="${value}"
+                                ${
+                                  Number(
+                                    this.config?.observation_window ?? 10,
+                                  ) === value
+                                    ? "selected"
+                                    : ""
+                                }
+                              >
+                                ${value} seconds
+                              </option>
+                            `,
+                          )
+                          .join("")}
+                      </select>
+
+                    </div>
+
+                    <div class="setting">
+
+                      <label
+                        class="setting-label"
+                        for="ranking-method"
+                      >
+                        Ranking method
+                      </label>
+
+                      <div class="setting-description">
+                        How recent power readings are combined.
+                      </div>
+
+                      <select
+                        class="interval-select"
+                        id="ranking-method"
+                      >
+                        <option
+                          value="recent_weighted"
+                          ${
+                            (this.config?.ranking_method ||
+                              "recent_weighted") === "recent_weighted"
+                              ? "selected"
+                              : ""
+                          }
+                        >
+                          Recent weighted average
+                        </option>
+
+                        <option
+                          value="average"
+                          ${
+                            this.config?.ranking_method === "average"
+                              ? "selected"
+                              : ""
+                          }
+                        >
+                          Average
+                        </option>
+
+                        <option
+                          value="peak"
+                          ${
+                            this.config?.ranking_method === "peak"
+                              ? "selected"
+                              : ""
+                          }
+                        >
+                          Peak
+                        </option>
+                      </select>
+
+                    </div>
+
+                    <div class="setting">
+
+                      <label
+                        class="setting-label"
+                        for="challenge-threshold"
+                      >
+                        Challenge threshold
+                      </label>
+
+                      <div class="setting-description">
+                        How much stronger a device must be to enter the Top 4.
+                      </div>
+
+                      <select
+                        class="interval-select"
+                        id="challenge-threshold"
+                      >
+                        ${[0, 2, 5, 10, 15, 20, 25]
+                          .map(
+                            (value) => `
+                              <option
+                                value="${value}"
+                                ${
+                                  Number(
+                                    this.config?.challenge_threshold ?? 5,
+                                  ) === value
+                                    ? "selected"
+                                    : ""
+                                }
+                              >
+                                ${value}%
+                              </option>
+                            `,
+                          )
+                          .join("")}
+                      </select>
+
+                    </div>
+
+                    <div class="setting">
+
+                      <label
+                        class="setting-label"
+                        for="challenge-confirmations"
+                      >
+                        Challenge confirmations
+                      </label>
+
+                      <div class="setting-description">
+                        Consecutive ranking checks required before replacing a device.
+                      </div>
+
+                      <select
+                        class="interval-select"
+                        id="challenge-confirmations"
+                      >
+                        ${[1, 2, 3, 4, 5]
+                          .map(
+                            (value) => `
+                              <option
+                                value="${value}"
+                                ${
+                                  Number(
+                                    this.config?.challenge_confirmations ?? 2,
+                                  ) === value
+                                    ? "selected"
+                                    : ""
+                                }
+                              >
+                                ${value}
+                              </option>
+                            `,
+                          )
+                          .join("")}
+                      </select>
+
+                    </div>
+
+                    <div class="setting">
+
+                      <label
+                        class="setting-label"
+                        for="minimum-power"
+                      >
+                        Minimum ranking power
+                      </label>
+
+                      <div class="setting-description">
+                        Ignore devices below this power when building the Top 4.
+                      </div>
+
+                      <select
+                        class="interval-select"
+                        id="minimum-power"
+                      >
+                        ${[0, 1, 3, 5, 10, 20]
+                          .map(
+                            (value) => `
+                              <option
+                                value="${value}"
+                                ${
+                                  Number(this.config?.minimum_power ?? 3) ===
+                                  value
+                                    ? "selected"
+                                    : ""
+                                }
+                              >
+                                ${value} W
+                              </option>
+                            `,
+                          )
+                          .join("")}
+                      </select>
+
+                    </div>
+
+                  </div>
 
                 </div>
 
@@ -1649,6 +1961,39 @@ class DynamicEnergyPanel extends HTMLElement {
       ?.querySelector("#observation-interval")
       ?.addEventListener("change", (event) => {
         this.updateObservationInterval(event.target.value);
+      });
+
+    this.shadowRoot
+      ?.querySelector("#observation-window")
+      ?.addEventListener("change", (event) => {
+        this.updateRankingSetting("observation_window", event.target.value);
+      });
+
+    this.shadowRoot
+      ?.querySelector("#challenge-threshold")
+      ?.addEventListener("change", (event) => {
+        this.updateRankingSetting("challenge_threshold", event.target.value);
+      });
+
+    this.shadowRoot
+      ?.querySelector("#challenge-confirmations")
+      ?.addEventListener("change", (event) => {
+        this.updateRankingSetting(
+          "challenge_confirmations",
+          event.target.value,
+        );
+      });
+
+    this.shadowRoot
+      ?.querySelector("#minimum-power")
+      ?.addEventListener("change", (event) => {
+        this.updateRankingSetting("minimum_power", event.target.value);
+      });
+
+    this.shadowRoot
+      ?.querySelector("#ranking-method")
+      ?.addEventListener("change", (event) => {
+        this.updateRankingMethod(event.target.value);
       });
 
     this.shadowRoot?.querySelectorAll("[data-field]").forEach((element) => {
