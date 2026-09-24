@@ -9,6 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
 )
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_ENERGY_ENTITY,
@@ -110,7 +111,7 @@ class DynamicEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             try:
                 power = float(state.state)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 continue
 
             if power < 0:
@@ -124,7 +125,7 @@ class DynamicEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self,
         sources: list[dict[str, Any]],
     ) -> float:
-        month = datetime.now().strftime("%Y-%m")
+        month = dt_util.now().strftime("%Y-%m")
 
         for source in sources:
             source_id = source.get(CONF_SOURCE_ID)
@@ -163,7 +164,7 @@ class DynamicEnergyCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             try:
                 raw_value = float(state.state)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 continue
 
             if raw_value < 0:

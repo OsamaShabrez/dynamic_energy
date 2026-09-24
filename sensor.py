@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -18,7 +16,6 @@ from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
 )
 
-from .const import DOMAIN
 from .coordinator import DynamicEnergyCoordinator
 
 
@@ -82,11 +79,11 @@ class DynamicEnergyCurrentPowerSensor(
 class DynamicEnergyMonthlyEnergySensor(
     DynamicEnergyBaseSensor,
 ):
-    _attr_name = "Apartment Energy This Month"
-    _attr_unique_id = "apartment_energy_this_month"
+    _attr_name = "Apartment Energy Month"
+    _attr_unique_id = "apartment_energy_month"
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
     _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:lightning-bolt"
 
     @property

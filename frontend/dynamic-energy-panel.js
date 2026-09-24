@@ -339,15 +339,8 @@ class DynamicEnergyPanel extends HTMLElement {
   }
 
   async saveChanges() {
-    if (!this.hass?.connection || this.saving) {
-      return;
-    }
-
     if (!this.config?.entry_id) {
-      this.error =
-        "Dynamic Energy config entry could not be identified. Please reload the page.";
-
-      this.render();
+      this.error = "Configuration entry ID is missing.";
       return;
     }
 
@@ -356,27 +349,20 @@ class DynamicEnergyPanel extends HTMLElement {
     this.render();
 
     try {
-      const result = await this.hass.connection.sendMessagePromise({
+      await this.hass.connection.sendMessagePromise({
         type: "dynamic_energy/save_config",
         entry_id: this.config.entry_id,
         observation_interval: Number(this.config.observation_interval || 10),
         sources: this.sources,
       });
 
-      if (!result?.success) {
-        throw new Error(result?.error || "Unable to save configuration.");
-      }
-
       this.saving = false;
+      this.render();
 
-      await this.loadConfig();
+      window.history.back();
     } catch (error) {
-      console.error("Dynamic Energy: failed to save configuration", error);
-
-      this.error =
-        error?.message || "Unable to save Dynamic Energy configuration.";
-
       this.saving = false;
+      this.error = error?.message || "Unable to save configuration.";
       this.render();
     }
   }
@@ -395,21 +381,53 @@ class DynamicEnergyPanel extends HTMLElement {
     this.config.observation_interval = parsed;
   }
 
+  formatPower(value, unit = "W") {
+    const numeric = Number(value);
+
+    if (!Number.isFinite(numeric)) {
+      return "Unavailable";
+    }
+
+    const normalizedUnit = String(unit || "W").toLowerCase();
+
+    if (normalizedUnit === "kw") {
+      return `${numeric.toFixed(2).replace(/\.?0+$/, "")} kW`;
+    }
+
+    const decimals = Math.abs(numeric) < 100 ? 1 : 0;
+
+    return `${numeric.toFixed(decimals).replace(/\.?0+$/, "")} W`;
+  }
+
+  formatEnergy(value, unit = "kWh") {
+    const numeric = Number(value);
+
+    if (!Number.isFinite(numeric)) {
+      return "Unavailable";
+    }
+
+    const normalizedUnit = String(unit || "kWh").toLowerCase();
+
+    return `${numeric.toFixed(3).replace(/\.?0+$/, "")} ${normalizedUnit}`;
+  }
+
   renderSourceCard(source) {
     const powerState = this.hass?.states?.[source.power_entity];
 
     const energyState = this.hass?.states?.[source.energy_entity];
 
     const power = powerState
-      ? `${powerState.state} ${
-          powerState.attributes?.unit_of_measurement || "W"
-        }`
+      ? this.formatPower(
+          powerState.state,
+          powerState.attributes?.unit_of_measurement,
+        )
       : "Unavailable";
 
     const energy = energyState
-      ? `${energyState.state} ${
-          energyState.attributes?.unit_of_measurement || "kWh"
-        }`
+      ? this.formatEnergy(
+          energyState.state,
+          energyState.attributes?.unit_of_measurement,
+        )
       : "Unavailable";
 
     return `
@@ -904,11 +922,13 @@ class DynamicEnergyPanel extends HTMLElement {
         .source-card {
           display: grid;
           grid-template-columns:
-            minmax(220px, 1fr)
-            auto
-            auto;
+            minmax(320px, 1fr)
+            110px
+            150px
+            125px
+            88px;
           align-items: center;
-          gap: 24px;
+          gap: 20px;
           min-height: 88px;
           padding: 18px 20px;
           border: 1px solid var(--divider-color);
@@ -969,15 +989,14 @@ class DynamicEnergyPanel extends HTMLElement {
         }
 
         .source-stats {
-          display: flex;
-          gap: 28px;
+          display: contents;
         }
 
         .stat {
           display: flex;
           flex-direction: column;
           gap: 4px;
-          min-width: 82px;
+          min-width: 0;
         }
 
         .stat-label {
@@ -990,11 +1009,15 @@ class DynamicEnergyPanel extends HTMLElement {
         .stat-value {
           font-size: 13px;
           font-weight: 600;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
 
         .source-actions {
           display: flex;
           align-items: center;
+          justify-content: flex-end;
           gap: 6px;
         }
 
@@ -1266,10 +1289,12 @@ class DynamicEnergyPanel extends HTMLElement {
           }
 
           .source-stats {
+            display: grid;
             grid-column: 1 / -1;
+            grid-template-columns:
+              repeat(3, minmax(0, 1fr));
+            gap: 18px;
             padding-left: 60px;
-            gap: 20px;
-            flex-wrap: wrap;
           }
 
           .source-actions {
@@ -1347,7 +1372,10 @@ class DynamicEnergyPanel extends HTMLElement {
           }
 
           .source-stats {
+            grid-template-columns:
+              repeat(3, minmax(0, 1fr));
             padding-left: 0;
+            gap: 12px;
           }
 
           .source-actions {
