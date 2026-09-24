@@ -1,0 +1,31 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Dynamic Energy",
+        "description": "Dynamic Energy will be available in the Home Assistant sidebar after setup. Use the Dynamic Energy panel to add and manage smart plugs and monitoring settings.",
+        "data": {
+          "observation_interval": "Update interval"
+        }
+      }
+    }
+  },
+  "selector": {
+    "observation_interval": {
+      "options": {
+        "5": "5 seconds",
+        "10": "10 seconds",
+        "15": "15 seconds",
+        "20": "20 seconds",
+        "25": "25 seconds",
+        "30": "30 seconds",
+        "35": "35 seconds",
+        "40": "40 seconds",
+        "45": "45 seconds",
+        "50": "50 seconds",
+        "55": "55 seconds",
+        "60": "60 seconds"
+      }
+    }
+  }
+}
