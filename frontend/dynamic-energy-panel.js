@@ -49,7 +49,10 @@ class DynamicEnergyPanel extends HTMLElement {
 
       this.brandToken = result?.token || null;
     } catch (error) {
-      console.warn("Dynamic Energy: unable to obtain brand image token", error);
+      console.warn(
+        "Dynamic Energy Monitor: unable to obtain brand image token",
+        error,
+      );
     }
   }
 
@@ -84,9 +87,12 @@ class DynamicEnergyPanel extends HTMLElement {
 
       this.error = null;
     } catch (error) {
-      console.error("Dynamic Energy: failed to load configuration", error);
+      console.error(
+        "Dynamic Energy Monitor: failed to load configuration",
+        error,
+      );
 
-      this.error = "Unable to load Dynamic Energy configuration.";
+      this.error = "Unable to load Dynamic Energy Monitor configuration.";
     } finally {
       this.loading = false;
       this.render();
@@ -1475,7 +1481,7 @@ class DynamicEnergyPanel extends HTMLElement {
           this.loading
             ? `
               <div class="loading">
-                Loading Dynamic Energy…
+                Loading Dynamic Energy Monitor…
               </div>
             `
             : `
@@ -1499,11 +1505,11 @@ class DynamicEnergyPanel extends HTMLElement {
                     <img
                       class="logo"
                       src="${this.escapeAttribute(this.getLogoUrl())}"
-                      alt="Dynamic Energy"
+                      alt="Dynamic Energy Monitor"
                     />
 
                     <div class="title-block">
-                      <h1>Dynamic Energy</h1>
+                      <h1>Dynamic Energy Monitor</h1>
 
                       <p>
                         Configure the devices used for apartment energy monitoring.
@@ -1537,7 +1543,7 @@ class DynamicEnergyPanel extends HTMLElement {
                       </div>
 
                       <div class="settings-description">
-                        How often Dynamic Energy records a power reading for device ranking.
+                        How often Dynamic Energy Monitor records a power reading for device ranking.
                       </div>
                     </div>
 

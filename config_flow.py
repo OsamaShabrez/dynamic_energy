@@ -21,7 +21,7 @@ class DynamicEnergyConfigFlow(
     ) -> config_entries.ConfigFlowResult:
         if user_input is not None:
             return self.async_create_entry(
-                title="Dynamic Energy",
+                title="Dynamic Energy Monitor",
                 data={},
                 options={
                     CONF_SOURCES: [],

@@ -1,4 +1,4 @@
-# Dynamic Energy
+# Dynamic Energy Monitor
 
 Home Assistant custom integration for dynamic household energy monitoring.
 

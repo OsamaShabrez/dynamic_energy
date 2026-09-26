@@ -55,7 +55,7 @@ def _get_entry(
     hass: HomeAssistant,
     entry_id: str | None = None,
 ) -> ConfigEntry | None:
-    """Return the Dynamic Energy config entry."""
+    """Return the Dynamic Energy Monitor config entry."""
     if entry_id:
         return hass.config_entries.async_get_entry(entry_id)
 
@@ -237,14 +237,14 @@ async def websocket_get_config(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Return Dynamic Energy configuration."""
+    """Return Dynamic Energy Monitor configuration."""
     entry = _get_entry(hass)
 
     if entry is None:
         connection.send_error(
             msg["id"],
             websocket_api.ERR_NOT_FOUND,
-            "Dynamic Energy config entry not found",
+            "Dynamic Energy Monitor config entry not found",
         )
         return
 
@@ -333,7 +333,7 @@ async def websocket_save_config(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Save Dynamic Energy configuration."""
+    """Save Dynamic Energy Monitor configuration."""
     entry = _get_entry(
         hass,
         msg["entry_id"],
@@ -343,7 +343,7 @@ async def websocket_save_config(
         connection.send_error(
             msg["id"],
             websocket_api.ERR_NOT_FOUND,
-            "Dynamic Energy config entry not found",
+            "Dynamic Energy Monitor config entry not found",
         )
         return
 
@@ -457,7 +457,7 @@ async def websocket_save_config(
 def async_register_websocket_commands(
     hass: HomeAssistant,
 ) -> None:
-    """Register Dynamic Energy WebSocket commands."""
+    """Register Dynamic Energy Monitor WebSocket commands."""
     websocket_api.async_register_command(
         hass,
         websocket_get_config,

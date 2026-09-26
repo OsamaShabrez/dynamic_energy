@@ -2,12 +2,12 @@
   "config": {
     "step": {
       "user": {
-        "title": "Dynamic Energy",
-        "description": "Dynamic Energy will be available after setup. Use the Dynamic Energy panel to add and manage smart plugs and monitoring settings."
+        "title": "Dynamic Energy Monitor",
+        "description": "Use the configuration panel to add and manage smart plugs and monitoring settings."
       }
     },
     "create_entry": {
-      "success": "Dynamic Energy is ready. Open the Dynamic Energy panel to add your smart plugs and configure monitoring settings."
+      "success": "Dynamic Energy Monitor is ready. Open the configuration panel to add your smart plugs and configure monitoring settings."
     }
   }
 }

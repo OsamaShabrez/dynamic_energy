@@ -1,8 +1,8 @@
-# Dynamic Energy validation tests
+# Dynamic Energy Monitor validation tests
 
-These tests validate the Dynamic Energy ranking, accounting, and generated
-sensor behavior with isolated in-memory fakes. They do not modify the real
-Dynamic Energy persistent storage.
+These tests validate the ranking, accounting, and generated sensor
+behavior with isolated in-memory fakes. They do not modify the real
+persistent storage.
 
 ## Files
 

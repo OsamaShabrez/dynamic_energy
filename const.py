@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 DOMAIN = "dynamic_energy"
-NAME = "Dynamic Energy"
+NAME = "Dynamic Energy Monitor"
 
 CONF_SOURCES = "sources"
 CONF_SOURCE_ID = "source_id"
@@ -106,7 +106,7 @@ PLATFORMS = ["sensor"]
 SOURCE_FINGERPRINT_SEPARATOR = "|"
 
 PANEL_URL_PATH = "dynamic-energy"
-PANEL_SIDEBAR_TITLE = "Dynamic Energy"
+PANEL_SIDEBAR_TITLE = "Dynamic Energy Monitor"
 PANEL_SIDEBAR_ICON = "mdi:lightning-bolt"
 
 FRONTEND_URL = f"/api/{DOMAIN}/frontend/dynamic-energy-panel.js"
