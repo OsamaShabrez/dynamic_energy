@@ -1,13 +1,13 @@
 {
   "domain": "dynamic_energy",
   "name": "Dynamic Energy Monitor",
-  "version": "0.2.0",
-  "documentation": "https://github.com/osamashabrez/dynamic_energy",
-  "issue_tracker": "https://github.com/osamashabrez/dynamic_energy/issues",
   "codeowners": ["@osamashabrez"],
   "config_flow": true,
   "dependencies": ["frontend", "http", "panel_custom", "websocket_api"],
+  "documentation": "https://github.com/osamashabrez/dynamic_energy",
   "integration_type": "hub",
   "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/osamashabrez/dynamic_energy/issues",
+  "version": "0.2.0",
   "single_config_entry": true
 }
