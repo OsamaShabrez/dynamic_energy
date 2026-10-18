@@ -13,9 +13,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import (
-    CoordinatorEntity,
-)
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .coordinator import DynamicEnergyCoordinator
 
@@ -33,11 +31,7 @@ async def async_setup_entry(
     ]
 
     entities.extend(
-        DynamicEnergyTopConsumerSensor(
-            coordinator,
-            rank=rank,
-        )
-        for rank in range(1, 5)
+        DynamicEnergyTopConsumerSensor(coordinator, rank=rank) for rank in range(1, 5)
     )
 
     async_add_entities(entities)
@@ -49,10 +43,7 @@ class DynamicEnergyBaseSensor(
 ):
     _attr_has_entity_name = False
 
-    def __init__(
-        self,
-        coordinator: DynamicEnergyCoordinator,
-    ) -> None:
+    def __init__(self, coordinator: DynamicEnergyCoordinator) -> None:
         super().__init__(coordinator)
 
     @property
@@ -62,13 +53,13 @@ class DynamicEnergyBaseSensor(
         )
 
 
-class DynamicEnergyMonthlyEnergySensor(DynamicEnergyBaseSensor):
-    _attr_name = "Apartment Energy Month"
-    _attr_unique_id = "apartment_energy_month"
-    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
-    _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_state_class = SensorStateClass.TOTAL_INCREASING
-    _attr_icon = "mdi:lightning-bolt"
+class DynamicEnergyCurrentPowerSensor(DynamicEnergyBaseSensor):
+    _attr_name = "Apartment Current Power"
+    _attr_unique_id = "apartment_current_power"
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:flash"
 
     @property
     def native_value(self) -> float | None:
@@ -83,7 +74,7 @@ class DynamicEnergyMonthlyEnergySensor(DynamicEnergyBaseSensor):
     _attr_unique_id = "apartment_energy_month"
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
     _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_icon = "mdi:lightning-bolt"
 
     @property
@@ -107,7 +98,6 @@ class DynamicEnergyTopConsumerSensor(DynamicEnergyBaseSensor):
         rank: int,
     ) -> None:
         super().__init__(coordinator)
-
         self._rank = rank
 
     @property
@@ -162,7 +152,6 @@ class DynamicEnergyTopConsumerSensor(DynamicEnergyBaseSensor):
             return None
 
         top_sources = self.coordinator.data.get("top_sources", [])
-
         index = self._rank - 1
 
         if index >= len(top_sources):
