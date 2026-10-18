@@ -62,13 +62,13 @@ class DynamicEnergyBaseSensor(
         )
 
 
-class DynamicEnergyCurrentPowerSensor(DynamicEnergyBaseSensor):
-    _attr_name = "Apartment Current Power"
-    _attr_unique_id = "apartment_current_power"
-    _attr_native_unit_of_measurement = UnitOfPower.WATT
-    _attr_device_class = SensorDeviceClass.POWER
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_icon = "mdi:flash"
+class DynamicEnergyMonthlyEnergySensor(DynamicEnergyBaseSensor):
+    _attr_name = "Apartment Energy Month"
+    _attr_unique_id = "apartment_energy_month"
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_icon = "mdi:lightning-bolt"
 
     @property
     def native_value(self) -> float | None:
