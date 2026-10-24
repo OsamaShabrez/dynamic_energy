@@ -1841,9 +1841,16 @@ class DynamicEnergyPanel extends HTMLElement {
                     this.sources.length
                       ? `
                         <div class="sources">
-                          ${this.sources
-                            .map((source) => this.renderSourceCard(source))
-                            .join("")}
+                        ${[...this.sources]
+                          .sort((a, b) =>
+                            String(a.name || "").localeCompare(
+                              String(b.name || ""),
+                              undefined,
+                              { sensitivity: "base", numeric: true },
+                            ),
+                          )
+                          .map((source) => this.renderSourceCard(source))
+                          .join("")}
                         </div>
                       `
                       : `
